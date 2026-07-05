@@ -4,12 +4,25 @@ Version 2.2.055
     Fixed Maces Cripple playing an extra anvil break sound that could not be disabled in sounds.yml (See notes)
     Fixed Super Breaker and Tree Feller mishandling durability on items with a custom max_damage component (See notes)
     Fixed Tree Feller ignoring durability damage changes made by other plugins via PlayerItemDamageEvent
+    Fixed a thread-safety issue that could cause incorrect FlatFile leaderboard results
+    Fixed renamed players' leftover database rows showing up in /mctop and being counted by /mcrank on SQL databases (See notes)
+    Fixed FlatFile leaderboards not retrying a failed rebuild until the next refresh interval
     Improved performance when players gain skill XP (See notes)
     Improved performance when taking smelted items out of furnaces (See notes)
+    Added PlaceholderAPI leaderboard rank-position placeholders for all skills except child skills (Salvage, Smelting) and for overall power level (See notes)
+    Improved SQL leaderboard query performance on large databases (See notes)
+    Added automatic per-skill leaderboard indexes for SQL databases (See notes)
+    Changed SQL leaderboard ordering for players with identical levels (See notes)
+    Changed the leaderboard placeholder cache to rebuild from a single user file scan on FlatFile and to pause refreshes while no leaderboard placeholders are in use (See notes)
+    Added 'General.PlaceholderAPI.Leaderboards.Max_Tracked_Rank' to config.yml
+    Added 'General.Leaderboards.Refresh_Interval_Seconds.SQL' to config.yml
+    Added 'General.Leaderboards.Refresh_Interval_Seconds.FlatFile' to config.yml
     (API) McMMOScoreboardObjectiveEvent is only fired on non-Folia servers (See notes)
+    (API) Added DatabaseManager#readLeaderboardSnapshot for reading every leaderboard scope in one call
     (Codebase) Added scoreboard-library 2.8.0 as a shaded dependency for the packet-based scoreboard implementation
     (Codebase) Added ViaVersion to plugin.yml softdepend
     (Codebase) Added unit tests covering the power level cap and skill level cap checks
+    (Codebase) Added async leaderboard snapshot caching for rank-position PlaceholderAPI lookups
 
     NOTES:
     Scoreboards on Folia (and Folia forks like Canvas) now use a packet-based implementation, since the Bukkit scoreboard API is not safe to use there. Paper and Spigot servers keep the existing Bukkit scoreboard implementation and are unaffected.
@@ -20,6 +33,72 @@ Version 2.2.055
     Taking smelted items out of a furnace no longer searches the full server recipe list every time.
     Cripple now plays a single sound which can be adjusted or disabled with the CRIPPLE entry in sounds.yml.
     Items with a custom maximum durability (set through the max_damage item component by data packs or item plugins) previously could make super abilities stop working or appear to restore durability; ability durability loss now always uses the item's own maximum.
+
+    -- PlaceholderAPI leaderboard rank-position placeholders --
+    This update adds placeholders that let you request specific leaderboard positions directly.
+    Format examples:
+        %mcmmo_mctop_<skill>:<position>%
+        %mcmmo_mctop_name_<skill>:<position>%
+
+    Mining examples:
+        %mcmmo_mctop_mining:1%         -> skill level of the #1 ranked Mining player
+        %mcmmo_mctop_name_mining:1%    -> name of the #1 ranked Mining player
+        %mcmmo_mctop_mining:34%        -> skill level of the #34 ranked Mining player
+        %mcmmo_mctop_name_mining:34%   -> name of the #34 ranked Mining player
+
+    Overall / power level examples:
+        %mcmmo_mctop_overall:1%
+        %mcmmo_mctop_name_overall:1%
+        %mcmmo_mctop_all:10%
+        %mcmmo_mctop_name_all:10%
+        %mcmmo_mctop_powerlevel:25%
+        %mcmmo_mctop_name_powerlevel:25%
+
+    Alias behavior:
+    'overall', 'all', and 'powerlevel' all map to the same overall leaderboard data.
+
+    Config notes:
+    'General.PlaceholderAPI.Leaderboards.Max_Tracked_Rank' controls the highest supported placeholder position.
+    Default is 100. Values are clamped between 10 and 1000, since higher positions cost memory and database reads on every cache refresh.
+    Requests above this value return an empty result.
+    Invalid positions (blank, non-numeric, 0, negative) also return an empty result.
+    Positions that no player currently holds also return an empty result.
+
+    'General.Leaderboards.Refresh_Interval_Seconds.FlatFile' controls how often FlatFile leaderboards are rebuilt.
+    This affects /mctop, /mcrank, and the leaderboard placeholders.
+    Default is 600 seconds (10 minutes), matching previous behavior.
+    'General.Leaderboards.Refresh_Interval_Seconds.SQL' controls how often the placeholder cache refreshes on SQL databases.
+    /mctop and /mcrank on SQL are unaffected and always query live data.
+    Default is 60 seconds.
+    Both intervals have a 60 second minimum; values below 60 are treated as 60.
+    Placeholder requests are served from cache between refreshes.
+
+    Each cache refresh reads every leaderboard in one pass; on FlatFile this is a single scan
+    of the user file no matter how many skills are tracked.
+    If no leaderboard placeholder has been used since the previous refresh, the next refresh
+    is skipped and the cache sits idle. The first request afterwards is served from the cached
+    data and triggers an immediate background refresh. Servers that never use these
+    placeholders do no recurring leaderboard cache work.
+
+    -- SQL leaderboard performance --
+    Leaderboard queries on SQL databases are now much faster on servers with large player tables.
+    mcMMO will automatically add per-skill indexes to the skills table on startup if they are missing.
+    On very large databases the first startup after updating may take longer while these indexes are built.
+    This runs once, is safe to re-run, and mcMMO will continue to start normally even if an index cannot be added.
+    Fresh SQL installs include these indexes from the start, and skill columns added by future
+    mcMMO updates get their index automatically.
+    If an index named idx_<skill> already exists but covers a different column, mcMMO assumes
+    it was created deliberately, leaves it alone, and does not retry on later startups.
+
+    When a player renames, the database row for their old name is kept internally under a
+    placeholder name. On SQL databases these rows could previously appear in /mctop and the
+    leaderboard placeholders, and were counted when computing /mcrank positions; they are now
+    excluded from all of them.
+
+    As part of this change, players with identical levels on SQL databases are now ordered
+    newest-registered-first in /mctop, /mcrank, and the leaderboard placeholders (previously
+    ties were ordered alphabetically by name). /mctop and /mcrank agree on tie positions.
+    FlatFile databases still order ties alphabetically.
 
 Version 2.2.054
     Added compatibility for new blocks and items from Chaos Cubed (Minecraft 26.2) to mcMMO
